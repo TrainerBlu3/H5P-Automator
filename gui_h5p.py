@@ -10,8 +10,6 @@ from brightspace-page-automator.
 Run with:  python gui_h5p.py
 """
 import asyncio
-import json
-import os
 import queue
 import sys
 import threading
@@ -31,75 +29,13 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QProgressDialog, QPushButton, QTextEdit, QToolButton,
-    QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit,
+    QMainWindow, QPushButton, QTextEdit, QToolButton, QVBoxLayout, QWidget,
 )
 
-from gui.constants import CONFIG_FILE, ICON_PATH, SESSION_FILE_GUI, VERSION
+from gui.constants import ICON_PATH, VERSION
 from gui.settings_dialog import SettingsDialog, load_config, save_config
-from gui.theme import T, _btn, _checkbox_style, _dark_palette, _entry_style, _log_style
-
-
-def _ensure_playwright_browser(app: QApplication) -> None:
-    """Download the Chromium build Playwright needs, once.
-
-    ``run.bat``/``run.sh`` do this for source checkouts, but a packaged
-    PyInstaller build has no shell wrapper — so the frozen exe/app must do
-    it itself on first launch. A frozen ``sys.executable`` *is* the app
-    binary, not a Python interpreter, so shelling out to
-    ``sys.executable -m playwright`` (what the source-checkout path could
-    do) would just re-launch the GUI. Instead we call Playwright's own
-    installer entry point in-process, which is what it uses internally
-    regardless of how it's invoked.
-    """
-    marker = Path(CONFIG_FILE).parent / ".playwright_installed"
-    if marker.exists():
-        return
-
-    dlg = QProgressDialog(
-        "Downloading browser components (one-time, ~1 min)…", None, 0, 0
-    )
-    dlg.setWindowTitle("H5P Automator — First-time Setup")
-    dlg.setMinimumDuration(0)
-    dlg.setCancelButton(None)
-    dlg.show()
-    app.processEvents()
-
-    result = {"ok": False, "error": None}
-
-    def worker():
-        try:
-            from playwright.__main__ import main as playwright_main
-            old_argv = sys.argv
-            sys.argv = ["playwright", "install", "chromium"]
-            try:
-                playwright_main()
-            except SystemExit as e:
-                if e.code not in (0, None):
-                    raise RuntimeError(f"playwright install exited with {e.code}")
-            finally:
-                sys.argv = old_argv
-            result["ok"] = True
-        except Exception as e:
-            result["error"] = str(e)
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    while t.is_alive():
-        app.processEvents()
-        t.join(timeout=0.05)
-    dlg.close()
-
-    if result["ok"]:
-        marker.write_text("ok")
-    else:
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.warning(
-            None, "Browser setup failed",
-            "Could not download the browser Playwright needs:\n"
-            f"{result['error']}\n\nYou can try again by restarting the app.",
-        )
+from gui.theme import T, _btn, _dark_palette, _entry_style, _log_style
 
 
 class MainWindow(QMainWindow):
@@ -119,7 +55,6 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_config()
-        self._refresh_status_dots()
 
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_log)
@@ -145,21 +80,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(sub)
         layout.addSpacing(16)
 
-        # 2. Moodle row
-        layout.addWidget(self._platform_row(
-            "Moodle", "moodle",
-            login_slot=self._start_moodle_login,
-        ))
-        layout.addSpacing(10)
-
-        # 3. Brightspace row
-        layout.addWidget(self._platform_row(
-            "Brightspace", "brightspace",
-            login_slot=self._start_bs_login,
-        ))
-        layout.addSpacing(16)
-
-        # 4. URL fields
+        # 2. URL fields
         layout.addWidget(self._label("BRIGHTSPACE COURSE URL"))
         layout.addSpacing(4)
         self._bs_entry = QLineEdit()
@@ -176,6 +97,12 @@ class MainWindow(QMainWindow):
         self._moodle_entry.setFixedHeight(36)
         self._moodle_entry.setStyleSheet(_entry_style())
         layout.addWidget(self._moodle_entry)
+        layout.addSpacing(10)
+
+        self._skip_grade_cb = QCheckBox("Skip grade item (don't add to gradebook)")
+        self._skip_grade_cb.setChecked(True)
+        self._skip_grade_cb.setStyleSheet(f"color: {T['text_muted']}; font-size: 12px; background: transparent;")
+        layout.addWidget(self._skip_grade_cb)
         layout.addSpacing(14)
 
         # 5. Run button
@@ -250,58 +177,11 @@ class MainWindow(QMainWindow):
         )
         return lbl
 
-    def _platform_row(self, title: str, key: str, login_slot) -> QFrame:
-        frame = QFrame()
-        frame.setStyleSheet(
-            f"QFrame {{ background: {T['card_bg']}; border: 1px solid {T['card_border']}; border-radius: 8px; }}"
-        )
-        outer = QVBoxLayout(frame)
-        outer.setContentsMargins(12, 10, 12, 10)
-        outer.setSpacing(6)
-
-        top = QHBoxLayout()
-        top.setSpacing(8)
-        dot = QLabel("●")
-        dot.setFixedWidth(14)
-        top.addWidget(dot)
-        name = QLabel(title)
-        name.setStyleSheet(f"color: {T['text']}; font-size: 13px; font-weight: 600; background: transparent;")
-        top.addWidget(name)
-        top.addStretch()
-        login_btn = QPushButton("Log in")
-        login_btn.setFixedHeight(28)
-        login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        login_btn.setStyleSheet(_btn(T["btn_muted"], T["btn_muted_h"], text=T["text"]))
-        login_btn.clicked.connect(login_slot)
-        top.addWidget(login_btn)
-        outer.addLayout(top)
-
-        skip_cb = QCheckBox("Skip grade item")
-        skip_cb.setStyleSheet(_checkbox_style())
-        outer.addWidget(skip_cb)
-
-        if key == "moodle":
-            self._moodle_dot, self._moodle_login_btn, self._moodle_skip_cb = dot, login_btn, skip_cb
-        else:
-            self._bs_dot, self._bs_login_btn, self._bs_skip_cb = dot, login_btn, skip_cb
-        return frame
-
-    def _refresh_status_dots(self):
-        # Moodle and Brightspace share one browser-context session file
-        # (SESSION_FILE_GUI) since run_h5p_only logs into both in the same
-        # context — so both dots reflect whether that session exists.
-        ok = os.path.exists(SESSION_FILE_GUI)
-        color = T["success"] if ok else T["warn"]
-        for dot in (getattr(self, "_moodle_dot", None), getattr(self, "_bs_dot", None)):
-            if dot:
-                dot.setStyleSheet(f"color: {color}; font-size: 13px; background: transparent;")
-
     # ── Settings dialog ──────────────────────────────────────────────────
 
     def _open_settings(self):
         dlg = SettingsDialog(self, parent=self)
         dlg.exec()
-        self._refresh_status_dots()
 
     # ── Config persistence ───────────────────────────────────────────────
 
@@ -311,96 +191,14 @@ class MainWindow(QMainWindow):
             self._bs_entry.setText(cfg["h5p_bs_url"])
         if cfg.get("h5p_moodle_url"):
             self._moodle_entry.setText(cfg["h5p_moodle_url"])
-        self._moodle_skip_cb.setChecked(bool(cfg.get("moodle_skip_grade_item", False)))
-        self._bs_skip_cb.setChecked(bool(cfg.get("bs_skip_grade_item", False)))
+        self._skip_grade_cb.setChecked(bool(cfg.get("skip_grade_item", True)))
 
     def _save_state(self):
         save_config({
             "h5p_bs_url": self._bs_entry.text().strip(),
             "h5p_moodle_url": self._moodle_entry.text().strip(),
-            "moodle_skip_grade_item": self._moodle_skip_cb.isChecked(),
-            "bs_skip_grade_item": self._bs_skip_cb.isChecked(),
+            "skip_grade_item": self._skip_grade_cb.isChecked(),
         })
-
-    # ── Moodle login (standalone) ────────────────────────────────────────
-
-    def _start_moodle_login(self):
-        self._moodle_login_btn.setEnabled(False)
-        self._moodle_login_btn.setText("Opening…")
-        moodle_url = self._moodle_entry.text().strip()
-        cfg = load_config()
-        moodle_user = cfg.get("moodle_username", "")
-        moodle_pass = cfg.get("moodle_password", "")
-        sso_pass = cfg.get("sso_password", "")
-        q = self._log_queue
-
-        def worker():
-            async def _run():
-                from browser import launch_browser
-                from moodle_login import run_moodle_login_only
-
-                def log_fn(msg, tag="dim"):
-                    q.put((msg, tag))
-
-                p, browser_obj, context, page = await launch_browser(log_fn=log_fn)
-                try:
-                    await run_moodle_login_only(
-                        context, moodle_url,
-                        moodle_username=moodle_user, moodle_password=moodle_pass,
-                        sso_password=sso_pass, log_fn=log_fn,
-                    )
-                finally:
-                    if browser_obj.is_connected():
-                        await browser_obj.close()
-                    await p.stop()
-
-            try:
-                asyncio.run(_run())
-            except Exception as e:
-                q.put((f"✗ Moodle login failed: {e}", "error"))
-            finally:
-                QTimer.singleShot(0, lambda: (
-                    self._moodle_login_btn.setEnabled(True),
-                    self._moodle_login_btn.setText("Log in"),
-                ))
-                QTimer.singleShot(0, self._refresh_status_dots)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    # ── Brightspace login (standalone) ───────────────────────────────────
-
-    def _start_bs_login(self):
-        self._bs_login_btn.setEnabled(False)
-        self._bs_login_btn.setText("Opening…")
-        cfg = load_config()
-        bs_user = cfg.get("bs_username", "")
-        bs_pass = cfg.get("bs_password", "")
-        sso_email = cfg.get("sso_email", "")
-        sso_password = cfg.get("sso_password", "")
-        q = self._log_queue
-
-        def worker():
-            from browser import run_login_only
-
-            def log_fn(msg, tag="dim"):
-                q.put((msg, tag))
-
-            try:
-                asyncio.run(run_login_only(
-                    bs_username=bs_user, bs_password=bs_pass,
-                    sso_email=sso_email, sso_password=sso_password,
-                    log_fn=log_fn,
-                ))
-            except Exception as e:
-                q.put((f"✗ Brightspace login failed: {e}", "error"))
-            finally:
-                QTimer.singleShot(0, lambda: (
-                    self._bs_login_btn.setEnabled(True),
-                    self._bs_login_btn.setText("Log in"),
-                ))
-                QTimer.singleShot(0, self._refresh_status_dots)
-
-        threading.Thread(target=worker, daemon=True).start()
 
     # ── Run ───────────────────────────────────────────────────────────────
 
@@ -412,6 +210,7 @@ class MainWindow(QMainWindow):
             return
 
         self._save_state()
+        skip_grade_item = self._skip_grade_cb.isChecked()
 
         moodle_ev = threading.Event()
         h5p_ev = threading.Event()
@@ -457,6 +256,7 @@ class MainWindow(QMainWindow):
                     sso_password=cfg.get("sso_password", ""),
                     moodle_username=cfg.get("moodle_username", ""),
                     moodle_password=cfg.get("moodle_password", ""),
+                    skip_grade_item=skip_grade_item,
                 ))
             except Exception as e:
                 q.put((f"✗ Error: {e}", "error"))
@@ -485,7 +285,6 @@ class MainWindow(QMainWindow):
                     self._ready_btn.hide()
                     self._h5p_ready_btn.hide()
                     self._h5p_skip_btn.hide()
-                    self._refresh_status_dots()
                 elif msg == "__H5P_MOODLE_WAITING__":
                     self._ready_btn.setText("Ready — Scrape Now")
                     try:
