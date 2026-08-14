@@ -333,6 +333,7 @@ class ContentChecker:
         moodle_username:      str               = "",
         moodle_password:      str               = "",
         verbose:              bool              = False,
+        skip_grade_item:      bool              = True,
     ):
         self.bs_url                 = bs_url.strip()
         self.moodle_url             = moodle_url.strip()
@@ -373,6 +374,7 @@ class ContentChecker:
             summary=self._summary,
             notify=self._notify,
             should_stop=lambda: self.stop_flag[0],
+            skip_grade_item=skip_grade_item,
         )
 
     def _debug_log_worker(self) -> None:

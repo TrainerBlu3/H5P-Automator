@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QTextEdit, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -46,7 +46,6 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_config()
-        self._refresh_status_dots()
 
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_log)
@@ -72,15 +71,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(sub)
         layout.addSpacing(16)
 
-        # 2. Moodle row
-        layout.addWidget(self._platform_row("Moodle", "moodle"))
-        layout.addSpacing(10)
-
-        # 3. Brightspace row
-        layout.addWidget(self._platform_row("Brightspace", "brightspace"))
-        layout.addSpacing(16)
-
-        # 4. URL fields
+        # 2. URL fields
         layout.addWidget(self._label("BRIGHTSPACE COURSE URL"))
         layout.addSpacing(4)
         self._bs_entry = QLineEdit()
@@ -97,6 +88,12 @@ class MainWindow(QMainWindow):
         self._moodle_entry.setFixedHeight(36)
         self._moodle_entry.setStyleSheet(_entry_style())
         layout.addWidget(self._moodle_entry)
+        layout.addSpacing(10)
+
+        self._skip_grade_cb = QCheckBox("Skip grade item (don't add to gradebook)")
+        self._skip_grade_cb.setChecked(True)
+        self._skip_grade_cb.setStyleSheet(f"color: {T['text_muted']}; font-size: 12px; background: transparent;")
+        layout.addWidget(self._skip_grade_cb)
         layout.addSpacing(14)
 
         # 5. Run button
@@ -171,55 +168,11 @@ class MainWindow(QMainWindow):
         )
         return lbl
 
-    def _platform_row(self, title: str, key: str) -> QFrame:
-        frame = QFrame()
-        frame.setStyleSheet(
-            f"QFrame {{ background: {T['card_bg']}; border: 1px solid {T['card_border']}; border-radius: 8px; }}"
-        )
-        outer = QHBoxLayout(frame)
-        outer.setContentsMargins(12, 10, 12, 10)
-        outer.setSpacing(8)
-
-        dot = QLabel("●")
-        dot.setFixedWidth(14)
-        outer.addWidget(dot)
-        name = QLabel(title)
-        name.setStyleSheet(f"color: {T['text']}; font-size: 13px; font-weight: 600; background: transparent;")
-        outer.addWidget(name)
-        outer.addStretch()
-        status = QLabel("")
-        status.setStyleSheet(f"color: {T['text_muted']}; font-size: 11px; background: transparent;")
-        outer.addWidget(status)
-
-        if key == "moodle":
-            self._moodle_dot, self._moodle_status = dot, status
-        else:
-            self._bs_dot, self._bs_status = dot, status
-        return frame
-
-    def _refresh_status_dots(self):
-        # Credentials live in Settings and are used for auto-login when Run
-        # is pressed — the dot just reflects whether creds are configured.
-        cfg = load_config()
-        pairs = [
-            (self._moodle_dot, self._moodle_status,
-             bool(cfg.get("moodle_username") and cfg.get("moodle_password"))),
-            (self._bs_dot, self._bs_status,
-             bool(cfg.get("bs_username") and cfg.get("bs_password"))),
-        ]
-        for dot, status, configured in pairs:
-            if not dot:
-                continue
-            color = T["success"] if configured else T["warn"]
-            dot.setStyleSheet(f"color: {color}; font-size: 13px; background: transparent;")
-            status.setText("configured" if configured else "no credentials")
-
     # ── Settings dialog ──────────────────────────────────────────────────
 
     def _open_settings(self):
         dlg = SettingsDialog(self, parent=self)
         dlg.exec()
-        self._refresh_status_dots()
 
     # ── Config persistence ───────────────────────────────────────────────
 
@@ -229,11 +182,13 @@ class MainWindow(QMainWindow):
             self._bs_entry.setText(cfg["h5p_bs_url"])
         if cfg.get("h5p_moodle_url"):
             self._moodle_entry.setText(cfg["h5p_moodle_url"])
+        self._skip_grade_cb.setChecked(bool(cfg.get("skip_grade_item", True)))
 
     def _save_state(self):
         save_config({
             "h5p_bs_url": self._bs_entry.text().strip(),
             "h5p_moodle_url": self._moodle_entry.text().strip(),
+            "skip_grade_item": self._skip_grade_cb.isChecked(),
         })
 
     # ── Run ───────────────────────────────────────────────────────────────
@@ -246,6 +201,7 @@ class MainWindow(QMainWindow):
             return
 
         self._save_state()
+        skip_grade_item = self._skip_grade_cb.isChecked()
 
         moodle_ev = threading.Event()
         h5p_ev = threading.Event()
@@ -291,6 +247,7 @@ class MainWindow(QMainWindow):
                     sso_password=cfg.get("sso_password", ""),
                     moodle_username=cfg.get("moodle_username", ""),
                     moodle_password=cfg.get("moodle_password", ""),
+                    skip_grade_item=skip_grade_item,
                 ))
             except Exception as e:
                 q.put((f"✗ Error: {e}", "error"))
@@ -319,7 +276,6 @@ class MainWindow(QMainWindow):
                     self._ready_btn.hide()
                     self._h5p_ready_btn.hide()
                     self._h5p_skip_btn.hide()
-                    self._refresh_status_dots()
                 elif msg == "__H5P_MOODLE_WAITING__":
                     self._ready_btn.setText("Ready — Scrape Now")
                     try:

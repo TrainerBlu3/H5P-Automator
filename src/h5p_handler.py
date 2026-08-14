@@ -24,6 +24,7 @@ class H5PHandler:
         summary: dict,
         notify: Optional[Callable] = None,
         should_stop: Optional[Callable] = None,
+        skip_grade_item: bool = True,
     ) -> None:
         self.log = log
         self._eval_in_any_frame = eval_in_any_frame
@@ -34,7 +35,17 @@ class H5PHandler:
         self._summary = summary
         self._notify = notify
         self._should_stop = should_stop or (lambda: False)
+        self._skip_grade_item = skip_grade_item
         self._DEEP_FIND_JS = DEEP_FIND_JS
+
+    def _grade_item_dismiss_texts(self, skip_texts: list) -> list:
+        """Texts to click on the D2L 'Add Grade Item' dialog.
+
+        skip_grade_item=True clicks the given skip/proceed-without texts (default,
+        matches prior always-skip behavior). False clicks 'Add Grade Item' instead,
+        which keeps the dialog's default action of creating a gradebook entry.
+        """
+        return skip_texts if self._skip_grade_item else ["add grade item"]
 
     async def enable_downloads(self, context, items: list) -> None:
         """
@@ -907,7 +918,7 @@ class H5PHandler:
                 except Exception:
                     pass
 
-            dismissed = await self._auto_dismiss(tab, ["skip", "proceed without"])
+            dismissed = await self._auto_dismiss(tab, self._grade_item_dismiss_texts(["skip", "proceed without"]))
             if dismissed:
                 self.log("  → Dismissed skip/grade dialog", "dim")
                 await tab.wait_for_timeout(500)
@@ -1082,7 +1093,9 @@ class H5PHandler:
             # "Add Grade Item" dialog appears after Insert — dismiss it
             await tab.wait_for_timeout(1500)
             self.log("  → Checking for 'Add Grade Item' dialog…", "dim")
-            dismissed = await self._auto_dismiss(tab, ["proceed without grade item", "proceed without", "skip"])
+            dismissed = await self._auto_dismiss(
+                tab, self._grade_item_dismiss_texts(["proceed without grade item", "proceed without", "skip"])
+            )
             if dismissed:
                 self.log("  → Dismissed 'Add Grade Item' dialog", "dim")
                 await tab.wait_for_timeout(1000)
@@ -1386,8 +1399,11 @@ class H5PHandler:
                 self.log("  ⚠ d2l-button.d2l-desktop not found — Save and Close may have failed", "warning")
 
             # After Save and Close: "Add Grade Item" dialog → click "Proceed Without Grade Item"
+            # (or "Add Grade Item" itself when skip_grade_item is False)
             await tab.wait_for_timeout(2000)
-            dismissed = await self._auto_dismiss(tab, ["proceed without grade item", "proceed without"])
+            dismissed = await self._auto_dismiss(
+                tab, self._grade_item_dismiss_texts(["proceed without grade item", "proceed without"])
+            )
             if dismissed:
                 self.log("  → Auto-dismissed 'Add Grade Item' dialog", "dim")
             await tab.wait_for_timeout(2000)
@@ -1484,7 +1500,9 @@ class H5PHandler:
             pass
         await tab.wait_for_timeout(1500)
 
-        dismissed = await self._auto_dismiss(tab, ["proceed without grade item", "proceed without"])
+        dismissed = await self._auto_dismiss(
+            tab, self._grade_item_dismiss_texts(["proceed without grade item", "proceed without"])
+        )
         if dismissed:
             self.log("  → Auto-dismissed 'Proceed Without Grade Item'", "dim")
             await tab.wait_for_timeout(800)

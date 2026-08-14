@@ -66,6 +66,7 @@ async def run_h5p_only(
     sso_password: str = "",
     moodle_username: str = "",
     moodle_password: str = "",
+    skip_grade_item: bool = True,
 ) -> None:
     from browser import launch_browser, wait_for_login
 
@@ -84,6 +85,7 @@ async def run_h5p_only(
         sso_password=sso_password,
         moodle_username=moodle_username,
         moodle_password=moodle_password,
+        skip_grade_item=skip_grade_item,
     )
     checker.h5p_skip_flag = h5p_skip_flag or [False]
     checker._summary = {"h5p_inserted": [], "h5p_failed": []}
