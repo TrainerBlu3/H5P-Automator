@@ -76,26 +76,54 @@ The "Skip grade item" checkboxes next to each platform row are placeholders
 for a future grade-item-skip feature — they're stored in the config file but
 don't currently change any behavior.
 
-## Releases (Windows / macOS builds)
+## Releases (Windows / macOS / Linux builds)
 
-Tagged pushes build standalone desktop binaries via GitHub Actions
-(`.github/workflows/release.yml`) — no Python install required for end users.
+Two build channels, both via GitHub Actions, both PyInstaller — no Python
+install required for end users:
 
-To cut a release:
+- **Tagged releases** (`.github/workflows/release.yml`) — push a tag like
+  `v1.0.1` to build all three platforms and attach them to a **draft**
+  GitHub Release (`generate_release_notes` fills in the changelog); nothing
+  goes live until you review and publish the draft yourself.
+  ```bash
+  git tag v1.0.1
+  git push origin v1.0.1
+  ```
+  You can also trigger `Actions → Release → Run workflow` manually to build
+  and inspect artifacts without pushing a tag or touching releases.
 
-```bash
-git tag v1.0.1
-git push origin v1.0.1
-```
+- **Rolling "latest" channel** (`.github/workflows/main-latest.yml`) —
+  every push to `main` rebuilds all three platforms, force-moves a `latest`
+  tag to that commit, and republishes a **prerelease** (not draft — this is
+  what the in-app updater polls, see below) with the fresh binaries
+  attached. This is a separate, always-on channel from the reviewed
+  `v*.*.*` releases above.
 
-This triggers a build on `windows-latest` and `macos-latest` that packages the
-app with PyInstaller (`H5PAutomator.exe` / `H5PAutomator.app`) and attaches
-the zipped binaries to a **draft** GitHub Release (`generate_release_notes`
-fills in the changelog) — nothing goes live until you review and publish the
-draft yourself.
+Artifacts: `H5PAutomator.exe` (Windows), `H5PAutomator.app` (macOS),
+`H5PAutomator` (Linux — a portable PyInstaller binary, not a `.deb`/AppImage;
+`chmod +x` and run it).
 
-You can also trigger `Actions → Release → Run workflow` manually to build and
-inspect artifacts without pushing a tag or touching releases.
+### In-app auto-update
+
+Packaged builds check the rolling "latest" release every 30 minutes (and
+once ~10s after startup) and compare its commit SHA against the one they
+were built from (`gui/_build_info.py`, written by CI at build time — absent
+in source checkouts, which makes update-checking a no-op there). This is a
+**notify-and-download** flow, not silent auto-replace:
+
+- If a run is in progress when an update is found, the update icon stays
+  hidden until that run finishes — it won't interrupt anything.
+- Once idle, the update icon (bottom bar, next to the gear) glows/blinks
+  green.
+- Clicking it downloads the matching platform zip to `~/Downloads` and
+  reveals it in the file browser; the user still does the final
+  unzip-and-run themselves.
+
+Full silent self-replacement was deliberately skipped: these builds aren't
+code-signed/notarized, so a silently-downloaded macOS build would still hit
+Gatekeeper's quarantine on first launch regardless, and Windows can't
+overwrite its own running exe without a separate relauncher process — both
+solvable, but out of scope for now.
 
 Notes on the packaged build:
 - On first launch, the app downloads Playwright's Chromium build itself
@@ -103,7 +131,7 @@ Notes on the packaged build:
   a one-time ~1 minute step shown in a progress dialog.
 - No custom app icon is bundled yet (`assets/icon.ico` referenced in
   `gui/constants.py` doesn't exist) — add one there and pass
-  `--icon assets/icon.ico` / `--icon assets/icon.icns` in the workflow's
+  `--icon assets/icon.ico` / `--icon assets/icon.icns` in the workflows'
   PyInstaller commands to brand the build.
 
 ## Where data lives

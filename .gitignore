@@ -34,3 +34,8 @@ node_modules/
 build/
 dist/
 *.spec
+
+# Generated at CI build time (see main-latest.yml / release.yml) — stamps
+# the packaged build with the commit SHA it was built from, for the
+# in-app update checker. Absent in source checkouts, which disables it.
+gui/_build_info.py

@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import queue
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -39,6 +40,11 @@ from PyQt6.QtWidgets import (
 from gui.constants import CONFIG_FILE, ICON_PATH, SESSION_FILE_GUI, VERSION
 from gui.settings_dialog import SettingsDialog, load_config, save_config
 from gui.theme import T, _btn, _checkbox_style, _dark_palette, _entry_style, _log_style
+from gui.updater import ASSET_NAME, UpdateCheckThread, UpdateDownloadThread
+
+UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000  # 30 min
+UPDATE_CHECK_STARTUP_DELAY_MS = 10 * 1000  # let the window paint first
+UPDATE_BLINK_INTERVAL_MS = 600
 
 
 def _ensure_playwright_browser(app: QApplication) -> None:
@@ -117,6 +123,13 @@ class MainWindow(QMainWindow):
         self._h5p_ready_event = None
         self._h5p_skip_flag = [False]
 
+        self._update_available = False
+        self._update_pending_notice = False
+        self._update_download_url = None
+        self._update_check_thread = None
+        self._update_download_thread = None
+        self._blink_on = False
+
         self._build_ui()
         self._load_config()
         self._refresh_status_dots()
@@ -124,6 +137,15 @@ class MainWindow(QMainWindow):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_log)
         self._poll_timer.start(100)
+
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._tick_update_blink)
+        self._blink_timer.start(UPDATE_BLINK_INTERVAL_MS)
+
+        self._update_check_timer = QTimer(self)
+        self._update_check_timer.timeout.connect(self._check_for_update)
+        self._update_check_timer.start(UPDATE_CHECK_INTERVAL_MS)
+        QTimer.singleShot(UPDATE_CHECK_STARTUP_DELAY_MS, self._check_for_update)
 
     # ── UI ────────────────────────────────────────────────────────────────
 
@@ -236,6 +258,17 @@ class MainWindow(QMainWindow):
         """)
         self._gear_btn.clicked.connect(self._open_settings)
         bottom_row.addWidget(self._gear_btn)
+
+        self._update_btn = QToolButton()
+        self._update_btn.setText("⭯")
+        self._update_btn.setToolTip("Update available — click to download")
+        self._update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_btn.setFixedSize(32, 32)
+        self._set_update_btn_style(lit=False)
+        self._update_btn.clicked.connect(self._start_update_download)
+        self._update_btn.hide()
+        bottom_row.addWidget(self._update_btn)
+
         bottom_row.addStretch()
         version_lbl = QLabel(VERSION)
         version_lbl.setStyleSheet(f"color: {T['text_dim']}; font-size: 10px; background: transparent;")
@@ -302,6 +335,105 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self, parent=self)
         dlg.exec()
         self._refresh_status_dots()
+
+    # ── Auto-update ──────────────────────────────────────────────────────
+
+    def _set_update_btn_style(self, lit: bool):
+        color = T["success"] if lit else T["text_muted"]
+        border = T["success"] if lit else T["card_border"]
+        self._update_btn.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent; color: {color};
+                border: 1px solid {border}; border-radius: 16px; font-size: 16px;
+            }}
+            QToolButton:hover {{ background: {T["btn_muted"]}; }}
+        """)
+
+    def _tick_update_blink(self):
+        if not self._update_available or self._update_btn.isHidden():
+            return
+        self._blink_on = not self._blink_on
+        self._set_update_btn_style(lit=self._blink_on)
+
+    def _check_for_update(self):
+        if self._update_check_thread and self._update_check_thread.isRunning():
+            return
+        self._update_check_thread = UpdateCheckThread(self)
+        self._update_check_thread.result.connect(self._on_update_check_result)
+        self._update_check_thread.start()
+
+    def _on_update_check_result(self, available: bool, url: str, error: str):
+        if not available:
+            return
+        self._update_available = True
+        self._update_download_url = url or None
+        # A run in progress shouldn't be interrupted by a glowing icon —
+        # defer showing it until __DONE__ fires in _poll_log.
+        if self._run_btn.isEnabled():
+            self._show_update_glow()
+        else:
+            self._update_pending_notice = True
+
+    def _show_update_glow(self):
+        self._update_pending_notice = False
+        self._update_btn.show()
+        self._set_update_btn_style(lit=True)
+        self._blink_on = True
+
+    def _start_update_download(self):
+        if not self._update_download_url:
+            self._append_log(
+                "A new version is available on GitHub, but this build "
+                "can't fetch it automatically — check the Releases page.",
+                "warning",
+            )
+            return
+        if self._update_download_thread and self._update_download_thread.isRunning():
+            return
+
+        downloads_dir = Path.home() / "Downloads"
+        if not downloads_dir.exists():
+            downloads_dir = Path(CONFIG_FILE).parent
+        dest = downloads_dir / (ASSET_NAME or "H5PAutomator-update.zip")
+
+        dlg = QProgressDialog("Downloading update…", None, 0, 100, self)
+        dlg.setWindowTitle("H5P Automator — Update")
+        dlg.setMinimumDuration(0)
+        dlg.setCancelButton(None)
+        dlg.show()
+
+        self._update_download_thread = UpdateDownloadThread(self._update_download_url, dest, self)
+        self._update_download_thread.progress.connect(
+            lambda read, total: dlg.setValue(int(read * 100 / total) if total else 0)
+        )
+        self._update_download_thread.finished_ok.connect(
+            lambda path: (dlg.close(), self._on_update_downloaded(path))
+        )
+        self._update_download_thread.failed.connect(
+            lambda err: (dlg.close(), self._on_update_download_failed(err))
+        )
+        self._update_download_thread.start()
+
+    def _on_update_downloaded(self, path: str):
+        self._update_available = False
+        self._update_btn.hide()
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["explorer", "/select,", path])
+            elif sys.platform == "darwin":
+                subprocess.run(["open", "-R", path])
+            else:
+                subprocess.run(["xdg-open", str(Path(path).parent)])
+        except Exception:
+            pass
+        self._append_log(
+            f"Update downloaded to {path}. Close this app and run the new "
+            "version to finish updating.",
+            "success",
+        )
+
+    def _on_update_download_failed(self, error: str):
+        self._append_log(f"Update download failed: {error}", "error")
 
     # ── Config persistence ───────────────────────────────────────────────
 
@@ -486,6 +618,8 @@ class MainWindow(QMainWindow):
                     self._h5p_ready_btn.hide()
                     self._h5p_skip_btn.hide()
                     self._refresh_status_dots()
+                    if self._update_pending_notice:
+                        self._show_update_glow()
                 elif msg == "__H5P_MOODLE_WAITING__":
                     self._ready_btn.setText("Ready — Scrape Now")
                     try:
