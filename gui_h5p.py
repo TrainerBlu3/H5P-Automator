@@ -36,10 +36,20 @@ from PyQt6.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from gui.constants import CONFIG_FILE, ICON_PATH, VERSION
+from gui.constants import CONFIG_FILE, ICON_PATH, USERDATA_DIR, VERSION
 from gui.settings_dialog import SettingsDialog, load_config, save_config
 from gui.theme import T, _btn, _dark_palette, _entry_style, _log_style
 from gui.updater import ASSET_NAME, UpdateCheckThread, UpdateDownloadThread
+
+# A PyInstaller onefile build extracts its bundled files (including the
+# bundled playwright driver, from --collect-all playwright) to a fresh
+# per-launch temp dir (_MEIxxxxx) that's wiped on exit. Left alone,
+# Playwright installs/looks for Chromium relative to that ephemeral
+# location — so a browser "installed" during one run is gone by the next,
+# forever re-triggering first-time setup. Pin it to a stable directory
+# before anything touches playwright.
+if getattr(sys, "frozen", False):
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(USERDATA_DIR / "playwright-browsers"))
 
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000  # 30 min
 UPDATE_CHECK_STARTUP_DELAY_MS = 10 * 1000  # let the window paint first
@@ -47,7 +57,7 @@ UPDATE_BLINK_INTERVAL_MS = 600
 
 
 def _ensure_playwright_browser(app: QApplication) -> None:
-    """Download the Chromium build Playwright needs, once.
+    """Download the Chromium build Playwright needs, if it isn't there.
 
     ``run.bat``/``run.sh`` do this for source checkouts, but a packaged
     PyInstaller build has no shell wrapper — so the frozen exe/app must do
@@ -57,10 +67,19 @@ def _ensure_playwright_browser(app: QApplication) -> None:
     do) would just re-launch the GUI. Instead we call Playwright's own
     installer entry point in-process, which is what it uses internally
     regardless of how it's invoked.
+
+    Checks the actual executable rather than a "we installed it once"
+    marker file, so it self-heals if the browser ever goes missing (e.g.
+    it was previously installed into a onefile build's ephemeral temp
+    extraction dir, which is wiped on every exit).
     """
-    marker = Path(CONFIG_FILE).parent / ".playwright_installed"
-    if marker.exists():
-        return
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            if Path(p.chromium.executable_path).exists():
+                return
+    except Exception:
+        pass  # fall through and (re)install
 
     dlg = QProgressDialog(
         "Downloading browser components (one-time, ~1 min)…", None, 0, 0
@@ -96,9 +115,7 @@ def _ensure_playwright_browser(app: QApplication) -> None:
         t.join(timeout=0.05)
     dlg.close()
 
-    if result["ok"]:
-        marker.write_text("ok")
-    else:
+    if not result["ok"]:
         QMessageBox.warning(
             None, "Browser setup failed",
             "Could not download the browser Playwright needs:\n"
