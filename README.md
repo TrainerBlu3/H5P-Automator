@@ -76,6 +76,36 @@ The "Skip grade item" checkboxes next to each platform row are placeholders
 for a future grade-item-skip feature — they're stored in the config file but
 don't currently change any behavior.
 
+## Releases (Windows / macOS builds)
+
+Tagged pushes build standalone desktop binaries via GitHub Actions
+(`.github/workflows/release.yml`) — no Python install required for end users.
+
+To cut a release:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+This triggers a build on `windows-latest` and `macos-latest` that packages the
+app with PyInstaller (`H5PAutomator.exe` / `H5PAutomator.app`) and attaches
+the zipped binaries to a **draft** GitHub Release (`generate_release_notes`
+fills in the changelog) — nothing goes live until you review and publish the
+draft yourself.
+
+You can also trigger `Actions → Release → Run workflow` manually to build and
+inspect artifacts without pushing a tag or touching releases.
+
+Notes on the packaged build:
+- On first launch, the app downloads Playwright's Chromium build itself
+  (there's no `run.bat`/`run.sh` wrapper to do it for a packaged exe/app) —
+  a one-time ~1 minute step shown in a progress dialog.
+- No custom app icon is bundled yet (`assets/icon.ico` referenced in
+  `gui/constants.py` doesn't exist) — add one there and pass
+  `--icon assets/icon.ico` / `--icon assets/icon.icns` in the workflow's
+  PyInstaller commands to brand the build.
+
 ## Where data lives
 
 All credentials, the saved browser session, and downloaded H5P files live in
