@@ -17,6 +17,15 @@ import sys
 import threading
 from pathlib import Path
 
+# A --windowed PyInstaller build has no console, so sys.stdout/stderr are
+# None — and plain print() (used throughout src/) crashes with
+# AttributeError the first time it runs. Give the process harmless
+# stand-ins before anything else can print.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from PyQt6.QtCore import Qt, QTimer
@@ -529,7 +538,8 @@ if __name__ == "__main__":
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("H5PAutomator")
         except Exception:
             pass
-        sys.stdout.reconfigure(encoding="utf-8")
+        if sys.stdout is not None:
+            sys.stdout.reconfigure(encoding="utf-8")
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
