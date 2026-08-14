@@ -29,3 +29,8 @@ Thumbs.db
 
 # Node (in case any tooling adds it)
 node_modules/
+
+# PyInstaller local build output (CI builds these fresh; see release.yml)
+build/
+dist/
+*.spec
