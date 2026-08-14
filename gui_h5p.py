@@ -32,8 +32,8 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QProgressDialog, QPushButton, QTextEdit, QToolButton,
-    QVBoxLayout, QWidget,
+    QMainWindow, QMessageBox, QProgressDialog, QPushButton, QTextEdit,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from gui.constants import CONFIG_FILE, ICON_PATH, VERSION
@@ -99,7 +99,6 @@ def _ensure_playwright_browser(app: QApplication) -> None:
     if result["ok"]:
         marker.write_text("ok")
     else:
-        from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(
             None, "Browser setup failed",
             "Could not download the browser Playwright needs:\n"
@@ -468,7 +467,9 @@ class MainWindow(QMainWindow):
             "warning": T["warn"], "dim": T["text_dim"],
         }.get(tag, T["text"])
         self._log.append(f'<span style="color:{color}">{msg}</span>')
-        self._log.verticalScrollBar().setValue(self._log.verticalScrollBar().maximum())
+        scrollbar = self._log.verticalScrollBar()
+        if scrollbar:
+            scrollbar.setValue(scrollbar.maximum())
 
     def _poll_log(self):
         try:
