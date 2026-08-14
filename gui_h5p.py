@@ -23,12 +23,74 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QTextEdit, QToolButton, QVBoxLayout, QWidget,
+    QMainWindow, QProgressDialog, QPushButton, QTextEdit, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from gui.constants import CONFIG_FILE, ICON_PATH, SESSION_FILE_GUI, VERSION
 from gui.settings_dialog import SettingsDialog, load_config, save_config
 from gui.theme import T, _btn, _checkbox_style, _dark_palette, _entry_style, _log_style
+
+
+def _ensure_playwright_browser(app: QApplication) -> None:
+    """Download the Chromium build Playwright needs, once.
+
+    ``run.bat``/``run.sh`` do this for source checkouts, but a packaged
+    PyInstaller build has no shell wrapper — so the frozen exe/app must do
+    it itself on first launch. A frozen ``sys.executable`` *is* the app
+    binary, not a Python interpreter, so shelling out to
+    ``sys.executable -m playwright`` (what the source-checkout path could
+    do) would just re-launch the GUI. Instead we call Playwright's own
+    installer entry point in-process, which is what it uses internally
+    regardless of how it's invoked.
+    """
+    marker = Path(CONFIG_FILE).parent / ".playwright_installed"
+    if marker.exists():
+        return
+
+    dlg = QProgressDialog(
+        "Downloading browser components (one-time, ~1 min)…", None, 0, 0
+    )
+    dlg.setWindowTitle("H5P Automator — First-time Setup")
+    dlg.setMinimumDuration(0)
+    dlg.setCancelButton(None)
+    dlg.show()
+    app.processEvents()
+
+    result = {"ok": False, "error": None}
+
+    def worker():
+        try:
+            from playwright.__main__ import main as playwright_main
+            old_argv = sys.argv
+            sys.argv = ["playwright", "install", "chromium"]
+            try:
+                playwright_main()
+            except SystemExit as e:
+                if e.code not in (0, None):
+                    raise RuntimeError(f"playwright install exited with {e.code}")
+            finally:
+                sys.argv = old_argv
+            result["ok"] = True
+        except Exception as e:
+            result["error"] = str(e)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    while t.is_alive():
+        app.processEvents()
+        t.join(timeout=0.05)
+    dlg.close()
+
+    if result["ok"]:
+        marker.write_text("ok")
+    else:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            None, "Browser setup failed",
+            "Could not download the browser Playwright needs:\n"
+            f"{result['error']}\n\nYou can try again by restarting the app.",
+        )
 
 
 class MainWindow(QMainWindow):
@@ -475,6 +537,8 @@ if __name__ == "__main__":
     app.setFont(QFont("Segoe UI", 10))
     if Path(ICON_PATH).exists():
         app.setWindowIcon(QIcon(ICON_PATH))
+
+    _ensure_playwright_browser(app)
 
     window = MainWindow()
     window.show()

@@ -1,0 +1,88 @@
+name: Release
+
+# Builds standalone desktop binaries for Windows and macOS with PyInstaller.
+#
+# - Push a tag like `v1.0.1` to build the binaries AND publish a GitHub
+#   Release with them attached.
+# - Or run this workflow manually (workflow_dispatch) to just build and
+#   inspect the artifacts without publishing anything.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: H5PAutomator-Windows
+          - os: macos-latest
+            artifact_name: H5PAutomator-macOS
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          pyinstaller --noconfirm --clean --windowed --onefile
+          --name H5PAutomator
+          --paths src
+          --collect-all playwright
+          gui_h5p.py
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: >
+          pyinstaller --noconfirm --clean --windowed --onefile
+          --name H5PAutomator
+          --paths src
+          --collect-all playwright
+          gui_h5p.py
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Compress-Archive -Path dist/H5PAutomator.exe -DestinationPath dist/${{ matrix.artifact_name }}.zip
+        shell: pwsh
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          zip -r ${{ matrix.artifact_name }}.zip H5PAutomator.app
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact_name }}.zip
+          draft: true
+          generate_release_notes: true
