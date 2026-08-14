@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Playwright / setup marker
+.playwright_installed
+
+# App data (sessions, credentials, downloads) — never lives in the repo,
+# but ignore anyway in case a local run drops files here
+downloads/
+userdata/
+session.json
+config.json
+*.session.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Node (in case any tooling adds it)
+node_modules/
