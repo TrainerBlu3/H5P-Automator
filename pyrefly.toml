@@ -1,0 +1,2 @@
+python-interpreter = ".venv/bin/python"
+search-path = [".", "src"]

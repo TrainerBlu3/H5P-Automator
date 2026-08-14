@@ -10,9 +10,12 @@ from brightspace-page-automator.
 Run with:  python gui_h5p.py
 """
 import asyncio
+import os
 import queue
+import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 # A --windowed PyInstaller build has no console, so sys.stdout/stderr are
@@ -30,7 +33,8 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QTextEdit, QToolButton, QVBoxLayout, QWidget,
+    QMainWindow, QMessageBox, QProgressDialog, QPushButton, QTextEdit,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from gui.constants import ICON_PATH, VERSION
@@ -273,7 +277,9 @@ class MainWindow(QMainWindow):
             "warning": T["warn"], "dim": T["text_dim"],
         }.get(tag, T["text"])
         self._log.append(f'<span style="color:{color}">{msg}</span>')
-        self._log.verticalScrollBar().setValue(self._log.verticalScrollBar().maximum())
+        scrollbar = self._log.verticalScrollBar()
+        if scrollbar:
+            scrollbar.setValue(scrollbar.maximum())
 
     def _poll_log(self):
         try:
@@ -328,6 +334,61 @@ class MainWindow(QMainWindow):
         self._h5p_skip_flag[0] = True
         if self._h5p_ready_event:
             self._h5p_ready_event.set()
+
+
+def _ensure_playwright_browser(app: QApplication) -> None:
+    """First-launch check: download Playwright's Chromium if it isn't already
+    installed. A packaged (PyInstaller) build has no run.sh/setup.sh wrapper
+    to do this ahead of time, so it must happen here, once, with the user
+    shown a progress dialog rather than the app silently hanging.
+    """
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as p:
+            if Path(p.chromium.executable_path).exists():
+                return
+    except Exception:
+        pass
+
+    progress = QProgressDialog(
+        "Downloading required browser component (one-time, ~1 minute)…",
+        "", 0, 0,
+    )
+    progress.setWindowTitle("H5P Automator — First-Time Setup")
+    progress.setCancelButton(None)
+    progress.setMinimumDuration(0)
+    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+    progress.show()
+    app.processEvents()
+
+    result: dict = {"error": None}
+
+    def worker():
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True, capture_output=True, text=True,
+            )
+        except Exception as e:
+            result["error"] = e
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    while t.is_alive():
+        app.processEvents()
+        time.sleep(0.05)
+
+    progress.close()
+
+    if result["error"]:
+        QMessageBox.critical(
+            None, "Setup Failed",
+            "Could not download the required browser component:\n\n"
+            f"{result['error']}\n\n"
+            "Try running manually: python -m playwright install chromium",
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
