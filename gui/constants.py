@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "H5P Automator"
-VERSION = "v1.0.0"
+VERSION = "v1.0.1"
 
 _ROOT = Path(__file__).parent.parent
 ICON_PATH = str(_ROOT / "assets" / "icon.ico")
