@@ -334,11 +334,12 @@ class ContentChecker:
         moodle_password:      str               = "",
         verbose:              bool              = False,
         skip_grade_item:      bool              = True,
+        stop_flag:            Optional[list]    = None,
     ):
         self.bs_url                 = bs_url.strip()
         self.moodle_url             = moodle_url.strip()
         self._verbose               = verbose
-        self.stop_flag              = [False]
+        self.stop_flag              = stop_flag if stop_flag is not None else [False]
         self.log                    = self._make_log_filter(log)
         self.on_complete            = on_complete
         self.moodle_ready_event     = moodle_ready_event

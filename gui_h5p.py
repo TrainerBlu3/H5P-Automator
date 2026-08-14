@@ -137,6 +137,8 @@ class MainWindow(QMainWindow):
         self._moodle_ready_event = None
         self._h5p_ready_event = None
         self._h5p_skip_flag = [False]
+        self._run_stop_flag = None
+        self._run_handle: dict = {}
 
         self._update_available = False
         self._update_pending_notice = False
@@ -213,6 +215,15 @@ class MainWindow(QMainWindow):
         self._run_btn.setStyleSheet(_btn(T["btn_primary"], T["btn_primary_h"]) + "QPushButton { font-size: 15px; }")
         self._run_btn.clicked.connect(self._start_run)
         layout.addWidget(self._run_btn)
+        layout.addSpacing(8)
+
+        self._stop_btn = QPushButton("Stop")
+        self._stop_btn.setFixedHeight(36)
+        self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_btn.setStyleSheet(_btn(T["btn_danger"], T["btn_danger_h"]))
+        self._stop_btn.clicked.connect(self._stop_run)
+        self._stop_btn.hide()
+        layout.addWidget(self._stop_btn)
         layout.addSpacing(8)
 
         # Pause-point buttons (hidden until worker signals it's waiting)
@@ -426,9 +437,13 @@ class MainWindow(QMainWindow):
         moodle_ev = threading.Event()
         h5p_ev = threading.Event()
         skip_flag = [False]
+        stop_flag = [False]
+        run_handle: dict = {}
         self._moodle_ready_event = moodle_ev
         self._h5p_ready_event = h5p_ev
         self._h5p_skip_flag = skip_flag
+        self._run_stop_flag = stop_flag
+        self._run_handle = run_handle
 
         self._ready_btn.hide()
         self._h5p_ready_btn.hide()
@@ -436,6 +451,9 @@ class MainWindow(QMainWindow):
 
         self._run_btn.setText("Running…")
         self._run_btn.setEnabled(False)
+        self._stop_btn.setText("Stop")
+        self._stop_btn.setEnabled(True)
+        self._stop_btn.show()
         self._log.clear()
 
         cfg = load_config()
@@ -468,13 +486,46 @@ class MainWindow(QMainWindow):
                     moodle_username=cfg.get("moodle_username", ""),
                     moodle_password=cfg.get("moodle_password", ""),
                     skip_grade_item=skip_grade_item,
+                    stop_flag=stop_flag,
+                    run_handle=run_handle,
                 ))
             except Exception as e:
-                q.put((f"✗ Error: {e}", "error"))
+                if not stop_flag[0]:
+                    q.put((f"✗ Error: {e}", "error"))
             finally:
                 on_done()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _stop_run(self):
+        handle = self._run_handle
+        loop = handle.get("loop")
+        browser = handle.get("browser")
+        if not loop or not browser:
+            self._append_log("Nothing running to stop yet — try again in a moment.", "warning")
+            return
+
+        if self._run_stop_flag is not None:
+            self._run_stop_flag[0] = True
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.setText("Stopping…")
+        self._append_log("⏹ Stopping — closing browser…", "warning")
+
+        # Unblock any pending "Ready — Scrape Now" / "Ready — Download H5P"
+        # pause-point wait so it doesn't sit there forever after the browser
+        # it was waiting to act on is gone.
+        for ev in (handle.get("moodle_ready_event"), handle.get("h5p_ready_event")):
+            if ev is not None:
+                ev.set()
+
+        async def _close():
+            try:
+                if browser.is_connected():
+                    await browser.close()
+            except Exception:
+                pass
+
+        asyncio.run_coroutine_threadsafe(_close(), loop)
 
     # ── Log polling ───────────────────────────────────────────────────────
 
@@ -495,6 +546,9 @@ class MainWindow(QMainWindow):
                 if msg == "__DONE__":
                     self._run_btn.setText("Run")
                     self._run_btn.setEnabled(True)
+                    self._stop_btn.hide()
+                    self._run_stop_flag = None
+                    self._run_handle = {}
                     self._ready_btn.hide()
                     self._h5p_ready_btn.hide()
                     self._h5p_skip_btn.hide()

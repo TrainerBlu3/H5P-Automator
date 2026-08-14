@@ -67,8 +67,23 @@ async def run_h5p_only(
     moodle_username: str = "",
     moodle_password: str = "",
     skip_grade_item: bool = True,
+    stop_flag: Optional[list] = None,
+    run_handle: Optional[dict] = None,
 ) -> None:
+    """
+    run_handle, if given, is populated with {"loop", "browser"} right after
+    the browser launches — letting the caller force-stop mid-run from
+    another thread via asyncio.run_coroutine_threadsafe(browser.close(),
+    loop), the same way a user manually closing the Chromium window already
+    aborts everything (any in-flight page/context call raises once the
+    browser is gone, unwinding through the except/finally below). It also
+    exposes moodle_ready_event/h5p_ready_event so a force-stop during a
+    pause point (waiting on "Ready — Scrape Now" / "Ready — Download H5P")
+    unblocks that wait instead of hanging forever.
+    """
     from browser import launch_browser, wait_for_login
+
+    stop_flag = stop_flag if stop_flag is not None else [False]
 
     checker = ContentChecker(
         bs_url=bs_url,
@@ -86,6 +101,7 @@ async def run_h5p_only(
         moodle_username=moodle_username,
         moodle_password=moodle_password,
         skip_grade_item=skip_grade_item,
+        stop_flag=stop_flag,
     )
     checker.h5p_skip_flag = h5p_skip_flag or [False]
     checker._summary = {"h5p_inserted": [], "h5p_failed": []}
@@ -101,6 +117,11 @@ async def run_h5p_only(
         return
 
     p, browser, context, page = await launch_browser()
+    if run_handle is not None:
+        run_handle["loop"] = asyncio.get_running_loop()
+        run_handle["browser"] = browser
+        run_handle["moodle_ready_event"] = moodle_ready_event
+        run_handle["h5p_ready_event"] = h5p_ready_event
     try:
         await wait_for_login(
             page, context,
@@ -139,10 +160,14 @@ async def run_h5p_only(
             await asyncio.sleep(0.5)
 
     except Exception as e:
-        log(f"✗ Unexpected error: {e}", "error")
+        if stop_flag[0]:
+            log("⏹ Stopped by user", "warning")
+        else:
+            log(f"✗ Unexpected error: {e}", "error")
         if on_complete:
             on_complete()
-        raise
+        if not stop_flag[0]:
+            raise
     finally:
         if browser.is_connected():
             await browser.close()
